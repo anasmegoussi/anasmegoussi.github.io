@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Planning staff – Semaine du 19/10</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--bg:#fff;--fg:#1c1c28;--mut:#6b6b80;--card:#f6f6f8;--line:#dcdce6;--ok:#17703d;--okbg:#dcf3e5;--ad:#9a5200;--adbg:#fde9cf;--pl:#3a3a4a;--plbg:#e9e9ef;--btn:#1c1c28;--btnfg:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#12121a;--fg:#ececf4;--mut:#9a9ab0;--card:#1c1c28;--line:#2f2f42;--ok:#6fdc9b;--okbg:#17382a;--ad:#f2b25f;--adbg:#3d2a10;--pl:#d0d0dc;--plbg:#2a2a3a;--btn:#ececf4;--btnfg:#12121a;color-scheme:dark}}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:900px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 10px}
+.mut{color:var(--mut)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+select,button{font:inherit;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:7px 10px}
+button{cursor:pointer}button.p{background:var(--btn);color:var(--btnfg);border-color:var(--btn)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)}.row:first-child{border-top:0}
+.row .d{min-width:110px;font-weight:600}.row .sp{flex:1}
+.b{font-size:12px;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.b.v{background:var(--okbg);color:var(--ok)}.b.a{background:var(--adbg);color:var(--ad)}.b.p{background:var(--plbg);color:var(--pl)}
+.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:520px}
+th,td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);vertical-align:top}
+th{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;border-top:0}
+td.n{font-weight:600}td.h{text-align:right;white-space:nowrap}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.add{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.err{color:#b3261e}
+footer{margin-top:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+</style></head>
+<body><main>
+<h1>Planning staff – semaine du 19 au 25 octobre</h1>
+<div class="mut">Choisis ton prénom, valide tes créneaux ou ajoute-en. Tout le monde voit les mises à jour en direct.</div>
+<h2>Mon espace</h2>
+<div class="card" id="me"></div>
+<h2>Planning par personne</h2>
+<div class="card wrap" id="all"></div>
+<footer><button id="csv">Télécharger les réponses (CSV)</button><span class="mut" id="sync"></span></footer>
+</main>
+<script>
+// ===== À REMPLIR (Supabase > Project Settings > API) =====
+const SUPABASE_URL = "https://uawpbslpraxglvwylrce.supabase.co";
+const SUPABASE_KEY = "sb_publishable_xdG45yzJiJ9YCs960QLsXQ_wNdLaxhY";
+// ==========================================================
+
+const D=["Lundi 19","Mardi 20","Mercredi 21","Jeudi 22","Vendredi 23","Samedi 24","Dimanche 25"];
+const P=["Adrien","Antony","Aram","Asma","Assiya","Ayoub","Chloé","Clémentine","Elio","Ennio","Eoghan","Ilyes","Ingrid","Janelle","Junior","Killian","Laura","Léonard","Lewnis","Lou","Mathioso","Matteo","Maya","Mélaine","Nabil","Pablo","Pedro","Robinson","Ryan","Sacha","Samuel","Sixtine","Swann","Theophane","Timothé","Warren"];
+
+let shifts=[],me="",sb=null,loaded=false,msg="Chargement…",busy=false,draft={d:0,s:8,e:9};
+try{me=localStorage.getItem("me")||""}catch(e){}
+
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fh=h=>(h%24)+"h";
+const st=x=>x.ok?"v":x.added?"a":"p";
+const lab={v:"validé",a:"ajouté, à valider",p:"à valider"};
+const hrs=x=>x.end_h-x.start_h;
+const sorted=l=>l.slice().sort((a,b)=>a.day-b.day||a.start_h-b.start_h);
+function opts(a,b,v){let o="";for(let i=a;i<=b;i++)o+=`<option value="${i}"${i==v?" selected":""}>${fh(i)}</option>`;return o}
+
+function render(){
+  const names=[...new Set([...P,...shifts.map(x=>x.person)])];
+  const mine=sorted(shifts.filter(x=>x.person===me));
+  let h=`<select id="who"><option value="">Qui es-tu ?</option>${names.map(n=>`<option${n===me?" selected":""}>${esc(n)}</option>`).join("")}</select>`;
+  if(!loaded)h+=`<p class="mut">${esc(msg)}</p>`;
+  else if(me){
+    const tot=mine.reduce((s,x)=>s+hrs(x),0),ok=mine.filter(x=>x.ok).reduce((s,x)=>s+hrs(x),0);
+    h+=` <span class="mut">${ok} h validées sur ${tot} h</span><div style="margin-top:8px">`;
+    h+=mine.length?mine.map(x=>`<div class="row"><span class="d">${D[x.day]}</span><span>${fh(x.start_h)} – ${fh(x.end_h)}</span><span class="b ${st(x)}">${lab[st(x)]}</span><span class="sp"></span>
+      <button data-a="tog" data-id="${esc(x.id)}" class="${x.ok?"":"p"}"${busy?" disabled":""}>${x.ok?"Retirer la validation":"Valider"}</button>${x.added?`<button data-a="del" data-id="${esc(x.id)}"${busy?" disabled":""}>Supprimer</button>`:""}</div>`).join(""):`<p class="mut">Aucun créneau pour l’instant.</p>`;
+    h+=`</div>`;
+    if(mine.some(x=>!x.ok))h+=`<div class="add"><button data-a="all" class="p"${busy?" disabled":""}>Tout valider</button></div>`;
+    h+=`<div class="add"><b>Ajouter un créneau</b><select id="ad">${D.map((d,i)=>`<option value="${i}"${i==draft.d?" selected":""}>${d}</option>`).join("")}</select>
+      de <select id="as">${opts(8,23,draft.s)}</select> à <select id="ae">${opts(9,24,draft.e)}</select><button data-a="add" class="p"${busy?" disabled":""}>Ajouter</button></div>`;
+    if(msg)h+=`<p class="err">${esc(msg)}</p>`;
+  }else h+=`<p class="mut">Sélectionne ton prénom pour voir et valider tes créneaux.</p>`;
+  document.getElementById("me").innerHTML=h;
+
+  const rows=names.map(n=>{const l=sorted(shifts.filter(x=>x.person===n));return{n,l,t:l.reduce((s,x)=>s+hrs(x),0),v:l.filter(x=>x.ok).reduce((s,x)=>s+hrs(x),0)}})
+    .filter(r=>r.l.length).sort((a,b)=>b.t-a.t||a.n.localeCompare(b.n));
+  const all=document.getElementById("all");
+  if(!loaded){all.innerHTML=`<span class="mut">${esc(msg)}</span>`;return}
+  all.innerHTML=rows.length?`<table><tr><th>Personne</th><th>Créneaux</th><th style="text-align:right">Validées / total</th></tr>${rows.map(r=>`<tr><td class="n">${esc(r.n)}</td><td><div class="chips">${r.l.map(x=>`<span class="b ${st(x)}">${D[x.day].slice(0,3)}. ${fh(x.start_h)} – ${fh(x.end_h)}${x.ok?" ✓":""}</span>`).join("")}</div></td><td class="h">${r.v} / ${r.t} h</td></tr>`).join("")}</table>`
+    :`<span class="mut">Aucun créneau pour l’instant.</span>`;
+}
+
+async function load(){
+  const {data,error}=await sb.from("shifts").select("id,person,day,start_h,end_h,ok,added");
+  if(error){if(!loaded)msg="Impossible de charger le planning : "+error.message;render();return}
+  shifts=data;loaded=true;if(msg==="Chargement…")msg="";
+  document.getElementById("sync").textContent="Mis à jour à "+new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+  render();
+}
+
+async function act(fn){
+  busy=true;msg="";render();
+  try{const {error}=await fn();if(error)msg="Action impossible : "+error.message}
+  catch(e){msg="Action impossible, vérifie ta connexion."}
+  busy=false;await load();
+}
+
+document.addEventListener("change",e=>{
+  if(e.target.id==="who"){me=e.target.value;msg="";try{localStorage.setItem("me",me)}catch(x){}render()}
+  if(e.target.id==="ad")draft.d=+e.target.value;
+  if(e.target.id==="as")draft.s=+e.target.value;
+  if(e.target.id==="ae")draft.e=+e.target.value;
+});
+
+document.addEventListener("click",e=>{
+  const b=e.target.closest("button[data-a]");if(!b||!sb||busy)return;
+  const a=b.dataset.a,t=()=>sb.from("shifts");
+  if(a==="tog"){const x=shifts.find(s=>s.id===b.dataset.id);if(x)act(()=>t().update({ok:!x.ok}).eq("id",x.id))}
+  else if(a==="del"){if(confirm("Supprimer ce créneau ?"))act(()=>t().delete().eq("id",b.dataset.id))}
+  else if(a==="all")act(()=>t().update({ok:true}).eq("person",me).eq("ok",false));
+  else if(a==="add"){
+    if(draft.e<=draft.s){msg="L’heure de fin doit être après le début.";render();return}
+    act(()=>t().insert({person:me,day:draft.d,start_h:draft.s,end_h:draft.e,added:true}));
+  }
+});
+
+document.getElementById("csv").addEventListener("click",()=>{
+  const q=v=>'"'+String(v).replace(/"/g,'""')+'"';
+  const lines=[["Personne","Jour","Début","Fin","Heures","Statut"].join(";")];
+  for(const x of shifts.slice().sort((a,b)=>a.person.localeCompare(b.person)||a.day-b.day||a.start_h-b.start_h))
+    lines.push([q(x.person),q(D[x.day]),fh(x.start_h),fh(x.end_h),hrs(x),q(lab[st(x)])].join(";"));
+  const blob=new Blob(["﻿"+lines.join("\n")],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="planning-reponses.csv";a.click();
+});
+
+render();
+if(!window.supabase||SUPABASE_URL.startsWith("COLLE")){
+  msg=window.supabase?"La page n’est pas encore configurée (URL et clé Supabase manquantes).":"Impossible de charger la page, vérifie ta connexion.";
+  render();
+}else{
+  sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+  load();
+  sb.channel("shifts").on("postgres_changes",{event:"*",schema:"public",table:"shifts"},()=>load()).subscribe();
+  setInterval(load,30000);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)load()});
+}
+</script></body></html>
